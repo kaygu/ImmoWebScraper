@@ -22,52 +22,56 @@ class Data:
 
         :param data: Dictionarry containing data, containing info about house price, locations etc
         """
-        for key, val in data.items():
-            if val == '':
-                val = None
-            if (key == "id" or key == "visualisationOption" or key == "specificities" or key == "certificates"):
-                pass
-            elif (key == "atticExists"):
-                self.attic = "Yes" if val == "true" else "No"
-            elif (key == "basementExists"):
-                self.basement = "Yes" if val == "true" else "No"
-            elif (key == "bedroom"):
-                self.bedrooms = data.get(key).get("count")
-            elif (key == "building"):
-                self.condition = data.get(key).get("condition")
-                self.constructionYear = data.get(key).get("constructionYear")
-            elif (key == "kitchen"):
-                self.kitchen_type = data.get(key).get("type")
-            elif (key == "land"):
-                self.land_surface = data[key]["surface"]
-            elif (key == "outdoor"):
-                surf = data[key]["garden"]["surface"]
-
-                self.garden_surface = surf if surf else 0
-                self.terrace = "Yes" if data[key]["terrace"]["exists"] == "true" else "No"
-            elif (key == "energy"):
-                self.heating_type = data[key]["heatingType"]
-            elif (key == "parking"):
-                indoor = data[key]["parkingSpaceCount"]["indoor"]
-                outdoor = data[key]["parkingSpaceCount"]["outdoor"]
-
-                self.parking_indoor = indoor if indoor  != '' else 0
-                self.parking_outdoor = outdoor if outdoor != '' else 0
-            elif (key == "wellnessEquipment"):
-                self.has_swimming_pool = "Yes" if val.get('hasSwimmingPool') == "true" else "No"
-            else:
-                # setattr creates a class attribute with the name "key" and the value "val"
-                setattr(self, key, val)
-
+        transaction = data.get("transaction")
+        property_ = data.get("property")
+        self.id = data.get("id")
+        self.transaction_type = transaction.get("type")
+        self.price = transaction.get("sale").get("price")
+        self.type = property_.get("type")
+        self.subtype = property_.get("subtype")
+        self.bedroom_count = property_.get("bedroomCount")
+        self.bathroom_count = property_.get("bathroomCount")
+        self.showerroom_count = property_.get("showerRoomCount")
+        location = property_.get("location")
+        if location:
+            self.region = location.get("region")
+            self.province = location.get("province")
+            self.district = location.get("district")
+            self.locality = location.get("locality")
+            self.postal_code = location.get("postalCode")
+            self.street_name = location.get("street")
+            self.street_number = location.get("number")
+        building = property_.get("building")
+        if building:
+            self.facades = building.get("facadeCount")
+            self.condition = building.get("condition")
+            self.construction_year = building.get("constructionYear")
+        self.living_surface = property_.get("netHabitableSurface")
+        self.garden_surface = property_.get("gardenSurface")
+        self.terrace_surface = property_.get("terraceSurface")
+        self.attic = property_.get("hasAttic")
+        self.basement = property_.get("hasBasement")
+        self.swimming_pool = property_.get("hasSwimmingPool")
+        self.fireplace = property_.get("fireplaceExists")
+        self.fitness_room = property_.get("hasFitnessRoom")
+        self.tennis_court = property_.get("hasTennisCourt")
+        self.sauna = property_.get("hasSauna")
+        self.jacuzzi = property_.get("hasJacuzzi")
+        self.hammam = property_.get("hasHammam")
 
 class ImmoWebScraper:
-    """
-    """
-    def __init__(self):
+    def __init__(self, query: str, pages: int = 333):
+        """
+        Scrap all the building data present on ImmoWeb.be
+        :param link: Search link to reference every found house for sale. Must contain epty bracket for page number
+        :param pages: Number of search pages to scrap trough
+        """
         self.driver_options = Options()
         self.driver_options.headless = True
         self.driver: webdriver.Firefox = webdriver.Firefox(executable_path='../../geckodriver/geckodriver.exe', options=self.driver_options)
         self.driver.implicitly_wait(2)
+        self._URL = f'https://www.immoweb.be/en/search/{query}'
+        self.nb_pages = pages
 
         self.data_list: List[Union[Data, None]] = []
 
@@ -79,15 +83,22 @@ class ImmoWebScraper:
         Cycle through all the search pages of immoweb, saving all the announcements found in a Data structure
         """
         # Cycle through every page in the search engine
-        for i in range(1, 334):
+        for i in range(1, self.nb_pages +1):
             try:
-                _URL = f"https://www.immoweb.be/en/search/house/for-sale?countries=BE&orderBy=relevance&page={i}"
-                self.driver.get(_URL)
+                self.driver.get(self._URL.format(i))
                 # Search for every announcement links (30 par search page)
                 for elem in self.driver.find_elements_by_xpath("//a[@class='card__title-link']"):
-                    self.data_list.append(Data(elem.get_attribute("href")))
+                    link = elem.get_attribute("href")
+                    if link:
+                        self.data_list.append(Data(link))
+                    else:
+                        raise Exception("Link could not be found", link)
+            except Exception as ex:
+                self.data_list[i] = None
+                print(ex)
             except:
                 print("Someting went wrong in url parsing")
+                raise
 
     def scrap_data(self) -> None:
         """
@@ -106,17 +117,19 @@ class ImmoWebScraper:
                     raise Exception(f"Status code : {req.status_code}")
                 soup = BeautifulSoup(req.content, "lxml")
                 # Searches for the first script tag, in our case the dataLayer we need is the first script
-                data_layer = soup.find("script")
+                start_pattern = re.compile(r'^\s+window.classified\s=\s')
+                end_pattern = re.compile(r';\s+$')
+                data_layer = soup.find("script", text=start_pattern).string
 
                 # Remove js components from script
-                pattern = re.compile(r'^\s+window.dataLayer\s=\s\[\s+')
-                pattern2 = re.compile(r'\s+\];$')
+
                 if data_layer:  
-                    raw = re.sub(pattern, '', data_layer.string)
-                    raw = re.sub(pattern2, '', raw)
-                    raw = json.loads(raw).get("classified")
+                    raw = re.sub(start_pattern, '', data_layer.string)
+                    raw = re.sub(end_pattern, '', raw)
+                    raw = json.loads(raw)
                     # Removes house groupes & appartement groups
-                    if raw.get("type") != "house group":
+                    property_type = raw.get("property").get("type")
+                    if property_type != "HOUSE_GROUP" and property_type != "APARTMENT_GROUP":
                         data.parse(raw)
                     else:
                         self.data_list[i] = None
@@ -128,12 +141,14 @@ class ImmoWebScraper:
             except:
                 self.data_list[i] = None
                 print("Someting bad happend")
+                raise
 
 
-    def fill_dataframe(self) -> None:
+    def fill_dataframe(self) -> pd.DataFrame:
         """
         Converts all the objects present in self.data_list to dictionaries, then feed them to the dataframe.
         """
         self.data_list = [i for i in self.data_list if i != None]
         self.df: DataFrame = pd.DataFrame([data.__dict__ for data in self.data_list])
         self.df.replace({'': None, 'None': None})
+        return self.df
